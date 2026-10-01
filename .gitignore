@@ -9,6 +9,7 @@
 *.userosscache
 *.sln.docstates
 artifacts/
+.winapp/
 
 # Build logs
 [Ll]og/
