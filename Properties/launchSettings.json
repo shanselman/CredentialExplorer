@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "CredentialExplorer (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "CredentialExplorer (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
