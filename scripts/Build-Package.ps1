@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:WINAPP_CLI_TELEMETRY_OPTOUT = '1'
 $root = Split-Path $PSScriptRoot -Parent
 $versionInfo = & (Join-Path $PSScriptRoot 'Get-ReleaseVersion.ps1') -Version $Version
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root 'artifacts\packages' }
@@ -36,7 +37,7 @@ $manifest.Package.Applications.Application.SetAttribute('EntryPoint', 'Windows.F
 $manifestPath = Join-Path $work 'AppxManifest.xml'
 $manifest.Save($manifestPath)
 $packagePath = Join-Path $output "CredentialExplorer-$($versionInfo.Tag)-win-$Architecture.msix"
-& winapp package $layout --manifest $manifestPath --exe CredentialExplorer.exe --output $packagePath --skip-pri
+& winapp package $layout --manifest $manifestPath --exe CredentialExplorer.exe --output $packagePath --skip-pri --self-contained
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $packagePath)) { throw "$Architecture MSIX packaging failed." }
 & (Join-Path $PSScriptRoot 'Test-Package.ps1') -Package $packagePath -Architecture $Architecture -Version $versionInfo.Version
 $hash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
