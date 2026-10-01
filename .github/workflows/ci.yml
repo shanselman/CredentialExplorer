@@ -67,7 +67,7 @@ jobs:
           dotnet-version: '10.0.x'
       - uses: microsoft/setup-WinAppCli@cc8ea9a08b3ee3db43d5aa6bddda4a0e87d800f7 # v0.1
         with:
-          version: '0.6.0'
+          version: 'v0.6.0'
       - name: Publish and verify self-contained MSIX
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
