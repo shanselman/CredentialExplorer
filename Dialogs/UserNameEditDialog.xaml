@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="CredentialExplorer.Dialogs.UserNameEditDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:CredentialExplorer"
+    AutomationProperties.AutomationId="UserNameEditDialog"
+    Style="{StaticResource DefaultContentDialogStyle}"
+    Title="Edit username"
+    PrimaryButtonText="Save username" CloseButtonText="Cancel"
+    DefaultButton="Close" PrimaryButtonClick="ValidateSave"
+    IsPrimaryButtonEnabled="{x:Bind ViewModel.CanSave, Mode=OneWay}">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="16">
+            <StackPanel Spacing="4">
+                <TextBlock Text="Target (unchanged)" Style="{StaticResource CaptionTextBlockStyle}" />
+                <TextBlock AutomationProperties.AutomationId="EditTarget"
+                    Text="{x:Bind ViewModel.Target, Mode=OneWay}" TextWrapping="Wrap"
+                    Style="{StaticResource BodyStrongTextBlockStyle}" />
+                <TextBlock Text="{x:Bind ViewModel.TypeName, Mode=OneWay}" TextWrapping="Wrap" />
+            </StackPanel>
+            <TextBox AutomationProperties.AutomationId="EditUserNameInput"
+                Header="Username" MaxLength="513"
+                Text="{x:Bind ViewModel.UserName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock AutomationProperties.AutomationId="EditValidationError"
+                Text="{x:Bind ViewModel.ValidationError, Mode=OneWay}" TextWrapping="Wrap"
+                Visibility="{x:Bind local:MainPage.Visible(ViewModel.HasValidationError), Mode=OneWay}" />
+            <TextBlock Text="Only the username will change. The target, type, existing secret, and other native metadata are preserved. Windows will update the modification time."
+                TextWrapping="Wrap" />
+            <TextBlock Text="{x:Bind ViewModel.EditNote, Mode=OneWay}" TextWrapping="Wrap" />
+            <TextBlock AutomationProperties.AutomationId="EditDemoNotice"
+                Text="Synthetic demo: changes affect in-memory metadata only." TextWrapping="Wrap"
+                Visibility="{x:Bind local:MainPage.Visible(ViewModel.IsDemo), Mode=OneWay}" />
+        </StackPanel>
+    </ScrollViewer>
+</ContentDialog>

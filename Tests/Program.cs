@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using CredentialExplorer.Core;
 using CredentialExplorer.ViewModels;
 using CredentialExplorer.Services;
+using CredentialExplorer.Tests;
 
 var passed = 0;
 void Check(bool condition, string name)
@@ -74,6 +75,77 @@ var empty = new MainPageViewModel(new SyntheticCredentialService(empty: true), _
 await empty.RefreshCommand.ExecuteAsync(null);
 Check(!empty.HasError && empty.CountText == "0 shown / 0 Windows entries enumerated" && empty.ShowEmpty, "Successful empty enumeration has accurate zero count");
 Check(new CredentialStoreException("Synthetic operation", 8).Message.Contains("does not establish a store capacity"), "Error 8 does not invent limits");
+
+var editable = windows.Single(c => c.Target == "Example.Calendar/demo");
+var domain = windows.Single(c => c.NativeType == 2);
+Check(editable.CanEditUserName && domain.CanEditUserName && web.All(c => !c.CanEditUserName) && !unknown.CanEditUserName,
+    "Username editing is scoped to supported Windows types");
+Check(CredentialEdits.GetValidationError(editable, "") is null &&
+    CredentialEdits.GetValidationError(domain, "") is not null, "Blank usernames follow credential type rules");
+Check(CredentialEdits.GetValidationError(editable, "demo\0suffix") is not null &&
+    CredentialEdits.GetValidationError(editable, new string('x', 514)) is not null, "Invalid and overlong usernames rejected");
+var editVm = new UserNameEditViewModel(domain);
+Check(!editVm.CanSave, "Unchanged username cannot be saved");
+editVm.UserName = "";
+Check(!editVm.CanSave && editVm.HasValidationError, "Editor surfaces domain username validation");
+editVm.UserName = "new-domain-demo";
+Check(editVm.CanSave && !editVm.HasValidationError, "Editor permits valid changed username");
+
+var fake = new FakeMetadataApi(editable);
+new WindowsCredentialService(fake).UpdateUserName(editable, "edited-native-demo");
+Check(fake.WriteCalls == 1 && fake.WriteFlags == WindowsCredentialService.PreserveCredentialBlob,
+    "Native update uses CRED_PRESERVE_CREDENTIAL_BLOB");
+Check(fake.FieldsPreserved && fake.BufferAliveAtWrite && fake.FreeCalls == 1,
+    "All other native fields preserved and fresh buffer released exactly once");
+Check(fake.WrittenUserName == "edited-native-demo" && fake.RequestedTarget == editable.Target && fake.RequestedType == editable.NativeType,
+    "Native update uses exact target/type and only the new username");
+
+var staleApi = new FakeMetadataApi(new CredentialMetadata
+{
+    Store = editable.Store, Target = editable.Target, NativeType = editable.NativeType,
+    UserName = "externally-changed-demo", Modified = editable.Modified, Persistence = editable.Persistence
+});
+try { new WindowsCredentialService(staleApi).UpdateUserName(editable, "edited-native-demo"); Check(false, "Stale entry rejected"); }
+catch (CredentialStoreException e) { Check(e.NativeCode == 1306 && staleApi.WriteCalls == 0 && staleApi.FreeCalls == 1, "Stale snapshot rejected before writing with native buffer released"); }
+var writeFailure = new FakeMetadataApi(editable) { WriteError = 8 };
+try { new WindowsCredentialService(writeFailure).UpdateUserName(editable, "edited-native-demo"); Check(false, "Write failure surfaced"); }
+catch (CredentialStoreException e) { Check(e.NativeCode == 8 && writeFailure.FreeCalls == 1 && !e.Message.Contains(editable.Target), "Write errors remain redacted and release buffers"); }
+var missing = new FakeMetadataApi(editable) { ReadError = 1168 };
+try { new WindowsCredentialService(missing).UpdateUserName(editable, "edited-native-demo"); Check(false, "Missing entry rejected"); }
+catch (CredentialStoreException e) { Check(e.NativeCode == 1168 && missing.WriteCalls == 0 && missing.FreeCalls == 0, "Missing entry is never recreated"); }
+var noChange = new FakeMetadataApi(editable);
+new WindowsCredentialService(noChange).UpdateUserName(editable, editable.UserName);
+Check(noChange.WriteCalls == 0 && noChange.FreeCalls == 1, "No-op native update performs no write");
+var unsupported = new FakeMetadataApi(web[0]);
+try { new WindowsCredentialService(unsupported).UpdateUserName(web[0], "edited-demo"); Check(false, "Web update rejected"); }
+catch (CredentialStoreException e) { Check(e.NativeCode == 87 && unsupported.ReadCalls == 0, "Unsupported store rejected before any native access"); }
+
+var editService = new SyntheticCredentialService();
+string? editorResult = null;
+var editFlow = new MainPageViewModel(editService, _ => Task.FromResult(false), true, _ => Task.FromResult(editorResult));
+await editFlow.RefreshCommand.ExecuteAsync(null);
+editFlow.SearchText = "calendar";
+editFlow.Selected = editFlow.Items.Single();
+await editFlow.EditUserNameCommand.ExecuteAsync(null);
+Check(editService.UpdateCalls == 0 && !editFlow.IsBusy, "Cancel editor never writes");
+editorResult = "edited-demo";
+await editFlow.EditUserNameCommand.ExecuteAsync(null);
+Check(editService.UpdateCalls == 1 && editFlow.Selected?.UserName == "edited-demo" &&
+    editFlow.CountText == "1 shown / 163 Windows entries enumerated", "Confirmed synthetic edit preserves identity and store count");
+Check(editFlow.Selected?.Persistence == editable.Persistence && editFlow.Selected?.NativeType == editable.NativeType,
+    "Synthetic edits preserve type and persistence");
+editFlow.SearchText = "edited-demo";
+editFlow.Selected = editFlow.Items.Single();
+editorResult = "another-demo";
+await editFlow.EditUserNameCommand.ExecuteAsync(null);
+Check(editFlow.Selected is null && editFlow.Items.Count == 0 && editFlow.CountText == "0 shown / 163 Windows entries enumerated",
+    "Edited usernames leaving the search clear the selection without changing store count");
+await editFlow.ShowWebCommand.ExecuteAsync(null);
+editFlow.Selected = editFlow.Items[0];
+Check(!editFlow.EditUserNameCommand.CanExecute(null), "Web username editing stays disabled");
+editFlow.DensityIndex = 1;
+Check(editFlow.IsCompact, "Compact density state is observable");
+
 Console.WriteLine($"{passed} assertions passed. No native credential store was accessed.");
 
 if (args.Contains("--native-readonly", StringComparer.Ordinal))

@@ -5,7 +5,8 @@ using CredentialExplorer.Core;
 namespace CredentialExplorer.ViewModels;
 
 public partial class MainPageViewModel(
-    ICredentialService service, Func<CredentialMetadata, Task<bool>> confirmRemoval, bool isDemo) : ObservableObject
+    ICredentialService service, Func<CredentialMetadata, Task<bool>> confirmRemoval, bool isDemo,
+    Func<CredentialMetadata, Task<string?>>? editUserName = null) : ObservableObject
 {
     private IReadOnlyList<CredentialMetadata> snapshot = [];
     private int? windowsCount;
@@ -17,6 +18,7 @@ public partial class MainPageViewModel(
     [NotifyCanExecuteChangedFor(nameof(ShowWindowsCommand))]
     [NotifyCanExecuteChangedFor(nameof(ShowWebCommand))]
     [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
+    [NotifyCanExecuteChangedFor(nameof(EditUserNameCommand))]
     [NotifyPropertyChangedFor(nameof(IsInteractive))]
     public partial bool IsBusy { get; set; }
 
@@ -30,10 +32,15 @@ public partial class MainPageViewModel(
     public partial int SortIndex { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsCompact))]
+    public partial int DensityIndex { get; set; }
+
+    [ObservableProperty]
     public partial IReadOnlyList<CredentialMetadata> Items { get; set; } = [];
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RemoveCommand))]
+    [NotifyCanExecuteChangedFor(nameof(EditUserNameCommand))]
     [NotifyPropertyChangedFor(nameof(HasSelection))]
     [NotifyPropertyChangedFor(nameof(DetailTarget))]
     [NotifyPropertyChangedFor(nameof(DetailUserName))]
@@ -41,6 +48,7 @@ public partial class MainPageViewModel(
     [NotifyPropertyChangedFor(nameof(DetailModified))]
     [NotifyPropertyChangedFor(nameof(DetailPersistence))]
     [NotifyPropertyChangedFor(nameof(DetailRemovalNote))]
+    [NotifyPropertyChangedFor(nameof(DetailEditNote))]
     public partial CredentialMetadata? Selected { get; set; }
 
     [ObservableProperty]
@@ -48,6 +56,9 @@ public partial class MainPageViewModel(
 
     [ObservableProperty]
     public partial string ScopeNote { get; set; } = "";
+
+    [ObservableProperty]
+    public partial string ScopeSummary { get; set; } = "";
 
     [ObservableProperty]
     public partial string CountText { get; set; } = "Not enumerated";
@@ -74,6 +85,7 @@ public partial class MainPageViewModel(
     public partial bool ShowEmpty { get; set; }
 
     public bool IsInteractive => !IsBusy;
+    public bool IsCompact => DensityIndex == 1;
     public bool HasSelection => Selected is not null;
     public string DetailTarget => Selected?.Target ?? "";
     public string DetailUserName => Selected?.DisplayUserName ?? "";
@@ -81,12 +93,14 @@ public partial class MainPageViewModel(
     public string DetailModified => Selected?.ModifiedText ?? "";
     public string DetailPersistence => Selected?.PersistenceText ?? "";
     public string DetailRemovalNote => Selected?.RemovalNote ?? "";
+    public string DetailEditNote => Selected?.EditNote ?? "";
 
     partial void OnSearchTextChanged(string value) => ApplyQuery();
     partial void OnSortIndexChanged(int value) => ApplyQuery();
 
     private bool CanInteract() => !IsBusy;
     private bool CanRemove() => !IsBusy && Selected?.CanDelete == true;
+    private bool CanEdit() => !IsBusy && editUserName is not null && Selected?.CanEditUserName == true;
 
     [RelayCommand(CanExecute = nameof(CanInteract))]
     private async Task ShowWindowsAsync() => await SwitchAsync(CredentialStore.Windows);
@@ -119,7 +133,11 @@ public partial class MainPageViewModel(
         ScopeNote = ActiveStore == CredentialStore.Windows
             ? "Current logon credential set via CredEnumerateW. Counts describe enumerated entries, not capacity. No app ownership is inferred."
             : "Supported Credential Locker metadata via PasswordVault. Legacy Web Credentials coverage may differ. Not Edge, Chrome, Firefox, or other browser password databases. This API does not supply modification time or owning app.";
+        ScopeSummary = ActiveStore == CredentialStore.Windows
+            ? "Current Windows logon store - secrets stay in Windows"
+            : "Credential Locker only - not browser password databases";
         if (IsDemo) ScopeNote = "SYNTHETIC DEMO - no host stores are accessed. " + ScopeNote;
+        if (IsDemo) ScopeSummary = "SYNTHETIC DEMO - " + ScopeSummary;
     }
 
     private async Task<bool> LoadAsync()
@@ -172,6 +190,43 @@ public partial class MainPageViewModel(
         CountText = $"{Items.Count} shown / {snapshot.Count} {noun} enumerated";
         EmptyText = snapshot.Count == 0 ? "No entries were returned by this store's API." : "No metadata matches your search.";
         ShowEmpty = Items.Count == 0;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEdit))]
+    private async Task EditUserNameAsync()
+    {
+        var entry = Selected;
+        if (entry is null || !CanEdit() || editUserName is null) return;
+        IsBusy = true;
+        try
+        {
+            var userName = await editUserName(entry);
+            if (userName is null)
+            {
+                StatusText = "Editing canceled. No credential was changed.";
+                return;
+            }
+            if (string.Equals(userName, entry.UserName, StringComparison.Ordinal))
+            {
+                StatusText = "No changes to save.";
+                return;
+            }
+            HasError = false;
+            ErrorText = "";
+            try { await Task.Run(() => service.UpdateUserName(entry, userName)); }
+            catch (CredentialStoreException error)
+            {
+                HasError = true;
+                ErrorText = error.Message;
+                StatusText = "Username update failed. Refresh to check the current entry.";
+                return;
+            }
+            var refreshed = await LoadAsync();
+            StatusText = refreshed
+                ? "Username updated. The existing secret was preserved."
+                : "Username updated, but refreshing the store failed. The count is unavailable.";
+        }
+        finally { IsBusy = false; }
     }
 
     [RelayCommand(CanExecute = nameof(CanRemove))]

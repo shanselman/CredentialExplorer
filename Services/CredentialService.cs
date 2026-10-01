@@ -8,6 +8,9 @@ public sealed class CredentialService : ICredentialService
 {
     private readonly WindowsCredentialService windows = new();
 
+    public void UpdateUserName(CredentialMetadata credential, string userName) =>
+        windows.UpdateUserName(credential, userName);
+
     public IReadOnlyList<CredentialMetadata> Enumerate(CredentialStore store)
     {
         if (store == CredentialStore.Windows) return windows.Enumerate();

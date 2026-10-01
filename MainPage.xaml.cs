@@ -5,6 +5,10 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Windowing;
+using CredentialExplorer.Dialogs;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Controls.Primitives;
 
 namespace CredentialExplorer;
 
@@ -18,7 +22,7 @@ public sealed partial class MainPage : Page
         ICredentialService service = App.IsDemo
             ? new SyntheticCredentialService(App.DemoEmpty, App.DemoFailure)
             : new CredentialService();
-        ViewModel = new(service, ConfirmRemovalAsync, App.IsDemo);
+        ViewModel = new(service, ConfirmRemovalAsync, App.IsDemo, EditUserNameAsync);
         InitializeComponent();
         Loaded += OnLoaded;
     }
@@ -66,6 +70,63 @@ public sealed partial class MainPage : Page
         if (args.InRecycleQueue || args.Item is not CredentialMetadata entry) return;
         AutomationProperties.SetAutomationId(args.ItemContainer, $"CredentialRow{args.ItemIndex}");
         AutomationProperties.SetName(args.ItemContainer, $"{entry.Target}, {entry.DisplayUserName}, {entry.TypeName}");
+    }
+
+    private void CredentialContextRequested(UIElement sender, ContextRequestedEventArgs args)
+    {
+        args.Handled = true;
+        if (!ViewModel.IsInteractive || sender is not ListView list) return;
+        var hasPosition = args.TryGetPosition(list, out var position);
+        ShowEntryMenu(list, args.OriginalSource as DependencyObject, hasPosition ? position : null);
+    }
+
+    private void CredentialRightTapped(object sender, RightTappedRoutedEventArgs args)
+    {
+        args.Handled = true;
+        if (!ViewModel.IsInteractive || sender is not ListView list) return;
+        ShowEntryMenu(list, args.OriginalSource as DependencyObject, args.GetPosition(list));
+    }
+
+    private void ShowEntryMenu(ListView list, DependencyObject? source, Windows.Foundation.Point? position)
+    {
+        var current = EntryFromElement(source, list);
+        if (current is null && position is { } pointerPosition)
+        {
+            var hostPosition = list.TransformToVisual(null).TransformPoint(pointerPosition);
+            foreach (var element in VisualTreeHelper.FindElementsInHostCoordinates(hostPosition, list))
+            {
+                current = EntryFromElement(element, list);
+                if (current is not null) break;
+            }
+        }
+        if (position is null) current ??= ViewModel.Selected;
+        if (current is null || !ViewModel.Items.Contains(current)) return;
+        ViewModel.Selected = current;
+        if (position is { } menuPosition) RowContextMenu.ShowAt(list, new FlyoutShowOptions { Position = menuPosition });
+        else RowContextMenu.ShowAt(list);
+    }
+
+    private static CredentialMetadata? EntryFromElement(DependencyObject? element, ListView list)
+    {
+        while (element is not null && element != list)
+        {
+            if (element is ListViewItem { Content: CredentialMetadata entry }) return entry;
+            if (element is FrameworkElement { DataContext: CredentialMetadata data }) return data;
+            element = VisualTreeHelper.GetParent(element);
+        }
+        return null;
+    }
+
+    public Style RowStyle(bool compact) => (Style)Resources[compact ? "CompactRowStyle" : "ComfortableRowStyle"];
+
+    private void CloseAppearance(object sender, RoutedEventArgs args) => AppearanceFlyout.Hide();
+    private void ShowAbout(object sender, RoutedEventArgs args) => AboutFlyout.ShowAt((FrameworkElement)sender);
+    private void CloseAbout(object sender, RoutedEventArgs args) => AboutFlyout.Hide();
+
+    private async Task<string?> EditUserNameAsync(CredentialMetadata entry)
+    {
+        var dialog = new UserNameEditDialog(entry, App.IsDemo) { XamlRoot = XamlRoot, RequestedTheme = RequestedTheme };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary ? dialog.ViewModel.UserName : null;
     }
 
     private async Task<bool> ConfirmRemovalAsync(CredentialMetadata entry)

@@ -6,6 +6,7 @@ public sealed class SyntheticCredentialService : ICredentialService
     private readonly bool failEnumeration;
     public int EnumerationCalls { get; private set; }
     public int DeleteCalls { get; private set; }
+    public int UpdateCalls { get; private set; }
 
     public SyntheticCredentialService(bool empty = false, bool failure = false)
     {
@@ -42,5 +43,20 @@ public sealed class SyntheticCredentialService : ICredentialService
         if (entry is null) throw new CredentialStoreException("Synthetic removal", 1168);
         entries.Remove(entry);
         DeleteCalls++;
+    }
+
+    public void UpdateUserName(CredentialMetadata credential, string userName)
+    {
+        CredentialEdits.Validate(credential, userName);
+        var entry = entries.SingleOrDefault(c => c.HasSameIdentity(credential));
+        if (entry is null) throw new CredentialStoreException("Synthetic username update", 1168);
+        CredentialEdits.EnsureUnchanged(credential, entry);
+        if (string.Equals(entry.UserName, userName, StringComparison.Ordinal)) return;
+        entries[entries.IndexOf(entry)] = new CredentialMetadata
+        {
+            Store = entry.Store, Target = entry.Target, NativeType = entry.NativeType,
+            UserName = userName, Persistence = entry.Persistence, Modified = DateTimeOffset.UtcNow
+        };
+        UpdateCalls++;
     }
 }

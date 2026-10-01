@@ -4,6 +4,7 @@ public interface ICredentialService
 {
     IReadOnlyList<CredentialMetadata> Enumerate(CredentialStore store);
     void Delete(CredentialMetadata credential);
+    void UpdateUserName(CredentialMetadata credential, string userName);
 }
 
 public sealed class CredentialStoreException : Exception

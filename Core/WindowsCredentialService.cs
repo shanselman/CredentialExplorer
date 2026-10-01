@@ -5,6 +5,12 @@ namespace CredentialExplorer.Core;
 
 public sealed class WindowsCredentialService
 {
+    internal const uint PreserveCredentialBlob = 1;
+    private readonly IMetadataApi editor;
+
+    public WindowsCredentialService() : this(new MetadataApi()) { }
+    internal WindowsCredentialService(IMetadataApi editor) => this.editor = editor;
+
     public IReadOnlyList<CredentialMetadata> Enumerate()
     {
         // Flags zero preserves the API's target identity, rather than an ALL_CREDENTIALS namespace decoration.
@@ -36,6 +42,30 @@ public sealed class WindowsCredentialService
             throw new CredentialStoreException("Windows removal: unsupported identity", 50);
         if (!NativeMethods.CredDeleteW(credential.Target, credential.NativeType, 0))
             throw new CredentialStoreException("Windows removal", Marshal.GetLastPInvokeError());
+    }
+
+    public void UpdateUserName(CredentialMetadata credential, string userName)
+    {
+        CredentialEdits.Validate(credential, userName);
+        var error = editor.Read(credential.Target, credential.NativeType, out var buffer);
+        if (error != 0) throw new CredentialStoreException("Windows username update: read current entry", error);
+        using var allocation = new CredentialBuffer(buffer, editor.Free);
+        if (buffer == nint.Zero)
+            throw new CredentialStoreException("Windows username update: invalid native record", 13);
+        var current = Marshal.PtrToStructure<NativeCredential>(buffer);
+        CredentialEdits.EnsureUnchanged(credential, ReadMetadata(current));
+        if (string.Equals(credential.UserName, userName, StringComparison.Ordinal)) return;
+        var userNamePointer = Marshal.StringToHGlobalUni(userName);
+        try
+        {
+            // Retain the fresh native record's flags, comments, alias, attributes and persistence without projecting their contents.
+            current.UserName = userNamePointer;
+            current.CredentialBlobSize = 0;
+            current.CredentialBlob = nint.Zero;
+            error = editor.Write(ref current, PreserveCredentialBlob);
+            if (error != 0) throw new CredentialStoreException("Windows username update", error);
+        }
+        finally { Marshal.FreeHGlobal(userNamePointer); }
     }
 
     internal static CredentialMetadata ReadMetadata(NativeCredential native)
@@ -82,12 +112,33 @@ public sealed class WindowsCredentialService
         public nint UserName;
     }
 
+    internal interface IMetadataApi
+    {
+        int Read(string target, uint type, out nint buffer);
+        int Write(ref NativeCredential credential, uint flags);
+        void Free(nint buffer);
+    }
+
+    private sealed class MetadataApi : IMetadataApi
+    {
+        public int Read(string target, uint type, out nint buffer) =>
+            NativeMethods.CredReadW(target, type, 0, out buffer) ? 0 : Marshal.GetLastPInvokeError();
+        public int Write(ref NativeCredential credential, uint flags) =>
+            NativeMethods.CredWriteW(ref credential, flags) ? 0 : Marshal.GetLastPInvokeError();
+        public void Free(nint buffer) => NativeMethods.CredFree(buffer);
+    }
+
     private sealed class CredentialBuffer : SafeHandleZeroOrMinusOneIsInvalid
     {
-        public CredentialBuffer(nint pointer) : base(true) => SetHandle(pointer);
+        private readonly Action<nint> release;
+        public CredentialBuffer(nint pointer, Action<nint>? release = null) : base(true)
+        {
+            this.release = release ?? NativeMethods.CredFree;
+            SetHandle(pointer);
+        }
         protected override bool ReleaseHandle()
         {
-            NativeMethods.CredFree(handle);
+            release(handle);
             return true;
         }
     }
@@ -104,5 +155,13 @@ public sealed class WindowsCredentialService
         [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool CredDeleteW(string targetName, uint type, uint flags);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool CredReadW(string targetName, uint type, uint flags, out nint credential);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool CredWriteW(ref NativeCredential credential, uint flags);
     }
 }

@@ -25,6 +25,8 @@ public sealed class CredentialMetadata
     };
     public string DisplayUserName => string.IsNullOrEmpty(UserName) ? "Not supplied" : UserName;
     public string ModifiedText => Modified?.ToLocalTime().ToString("g") ?? "Not supplied by this API";
+    public string ModifiedShortText => Modified?.ToLocalTime().ToString("d") ?? "Not supplied";
+    public string IconGlyph => Store == CredentialStore.Web ? "\uE774" : "\uE8D7";
     public string PersistenceText => Persistence switch
     {
         1 => "Logon session",
@@ -35,6 +37,15 @@ public sealed class CredentialMetadata
     };
     public bool CanDelete => !string.IsNullOrEmpty(Target) &&
         (Store == CredentialStore.Web || NativeType is 1 or 2 or 3 or 5);
+    public bool CanEditUserName => Store == CredentialStore.Windows &&
+        !string.IsNullOrEmpty(Target) && NativeType is 1 or 2;
+    public string EditNote => CanEditUserName
+        ? NativeType == 1
+            ? "Username is editable metadata. Generic secrets are app-defined; changing this does not change a password or guarantee the app will use it."
+            : "Username changes can affect automatic sign-in. The existing password stays unchanged."
+        : Store == CredentialStore.Web
+            ? "Username editing is unavailable: Credential Locker has no supported metadata-only update operation."
+            : "Username editing is available only for Generic and Domain password entries. Certificate, extended, and unknown types are read-only.";
     public string RemovalNote => CanDelete
         ? "Remove only an entry you recognize. Its owning app may require you to sign in again."
         : "Removal is unavailable for this type: the MVP does not infer extended or unknown deletion identities.";
