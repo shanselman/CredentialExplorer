@@ -1,0 +1,152 @@
+name: Signed release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version, such as 1.2.3
+        required: true
+        default: '0.1.0'
+        type: string
+      publish_release:
+        description: Create a draft GitHub release after signing
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  prepare:
+    name: Validate version and signing configuration
+    runs-on: windows-2025
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require signing configuration
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SIGNING_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT_NAME: ${{ vars.SIGNING_ACCOUNT_NAME }}
+          SIGNING_CERTIFICATE_PROFILE: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+        run: |
+          $required = @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET',
+            'SIGNING_ENDPOINT', 'SIGNING_ACCOUNT_NAME', 'SIGNING_CERTIFICATE_PROFILE', 'MSIX_PUBLISHER')
+          $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+          if ($missing.Count -gt 0) {
+            throw ('Signing configuration is missing: ' + ($missing -join ', ') + '. No release will be published.')
+          }
+          $endpoint = [uri]$env:SIGNING_ENDPOINT
+          if ($endpoint.Scheme -ne 'https' -or $endpoint.Host -notmatch '^[a-z0-9-]+\.codesigning\.azure\.net$') {
+            throw 'Use an HTTPS Azure Artifact Signing regional endpoint.'
+          }
+      - name: Normalize stable version
+        id: version
+        env:
+          RAW_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          $info = .\scripts\Get-ReleaseVersion.ps1 -Version $env:RAW_VERSION
+          "version=$($info.Version)" >> $env:GITHUB_OUTPUT
+          "tag=$($info.Tag)" >> $env:GITHUB_OUTPUT
+
+  build:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      publisher: ${{ vars.MSIX_PUBLISHER }}
+
+  sign:
+    name: Sign and verify MSIX packages
+    needs: [prepare, build]
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: CredentialExplorer-unsigned-*
+          merge-multiple: true
+          path: signed
+      - name: Sign with Azure Artifact Signing
+        uses: azure/trusted-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\signed
+          files-folder-filter: msix
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-interactive-browser-credential: true
+      - name: Verify signatures and regenerate checksums
+        env:
+          PACKAGE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          foreach ($architecture in @('x64', 'arm64')) {
+            $package = Join-Path $PWD "signed\CredentialExplorer-v$env:PACKAGE_VERSION-win-$architecture.msix"
+            .\scripts\Test-Package.ps1 -Package $package -Architecture $architecture `
+              -Version $env:PACKAGE_VERSION -RequireSignature
+            $hash = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $([IO.Path]::GetFileName($package))" | Set-Content "$package.sha256" -Encoding ascii
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: CredentialExplorer-signed
+          path: |
+            signed\*.msix
+            signed\*.msix.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Create draft release
+    needs: [prepare, sign]
+    if: github.event_name == 'push' || inputs.publish_release
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: CredentialExplorer-signed
+          path: release
+      - name: Create draft with verified signed assets
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Credential Explorer ${{ needs.prepare.outputs.version }}
+          draft: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/*.msix
+            release/*.msix.sha256
+          body: |
+            Self-contained, Azure-signed MSIX installers for x64 and ARM64 Windows.
+            Choose the package matching your processor. Verify the accompanying SHA-256 checksum.
+            No separate .NET or Windows App Runtime installation is required.
+            This app works with existing credential stores. It never reveals or exports secrets.

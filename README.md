@@ -15,7 +15,9 @@ A standalone WinUI 3 metadata-only front end over the current user's existing cr
 - DPI-aware window sizing, responsive layout, accessible control names, and automation IDs.
 - Isolated synthetic demo modes and a small assertion runner for safe verification.
 
-The app currently has an English-language UI. No prebuilt installer is included; build and run locally.
+The app currently has an English-language UI. GitHub Actions builds unsigned development artifacts; public installers require the signed release workflow described below.
+
+The gold key icon is original emoji-style artwork, shared by the native system menu, executable, and packaged app logos. To regenerate the multi-resolution ICO and PNG assets, run `python .\scripts\generate-icons.py` with Pillow installed. Pillow is not required to build or run the app.
 
 ## Stores and limitations
 
@@ -76,6 +78,42 @@ For a running synthetic app, `.\scripts\ui-tests.ps1 -AppPid <PID> -ArtifactDire
 **UI automation caveat:** run pointer/context-menu checks on an isolated interactive Windows desktop. Background mouse delivery can be ignored by WinUI, and restoring another app's focus can dismiss a flyout before an assertion observes it. These checks remain explicit failures, not silently skipped passes. The app also supports the standard Shift+F10 keyboard context menu; edit/remove actions remain directly available in the detail command bar. High-contrast styling uses native resources but has not been visually exercised in an OS high-contrast session.
 
 An opt-in `dotnet run --project .\Tests\CredentialExplorer.Tests.csproj -- --native-readonly` smoke check reads host metadata without printing any names, usernames, or counts. It performs no native writes, secret reads, or removals. This is separate from the default synthetic assertion run.
+
+## Builds and releases
+
+**Build and test** runs on pushes to `main`, pull requests, and manual dispatch. It executes synthetic assertions only, then cross-builds self-contained x64 and ARM64 MSIX packages on Windows runners. It does not launch the app, access host credential stores, install certificates, or change Developer Mode. Unsigned packages and SHA-256 checksums are retained as development artifacts, not published as installable releases.
+
+Local packaging uses the same script as CI:
+
+```powershell
+.\scripts\Build-Package.ps1 -Architecture x64 -Version 0.1.0
+.\scripts\Build-Package.ps1 -Architecture arm64 -Version 0.1.0
+```
+
+The app retains full-trust MSIX identity and includes both .NET and Windows App Runtime files. It is not an unpackaged portable EXE. Publish trimming and ReadyToRun are disabled for this initial release pipeline to avoid changing WinUI reflection/runtime behavior. Outputs are under `artifacts\packages`; no local signing or certificate trust is performed.
+
+**Signed release** runs for stable `vMAJOR.MINOR.PATCH` tags or manual dispatch. Like WindowsEdgeLight, it uses Azure Trusted Signing (now called Artifact Signing), but signs the MSIX rather than shipping a portable EXE. It validates signing configuration before building, signs both packages with an RFC 3161 timestamp, verifies their signatures, and regenerates checksums after signing. Tag runs create a **draft** release for human review. Manual dispatch defaults to signed artifacts only; opt into a draft with `publish_release`.
+
+Configure these repository or organization **secrets**:
+
+| Secret | Purpose |
+| --- | --- |
+| `AZURE_TENANT_ID` | Signing application's tenant |
+| `AZURE_CLIENT_ID` | Signing application's client ID |
+| `AZURE_CLIENT_SECRET` | Signing application's credential |
+
+Configure these repository **variables**:
+
+| Variable | Purpose |
+| --- | --- |
+| `SIGNING_ENDPOINT` | Regional HTTPS endpoint, such as `https://wus2.codesigning.azure.net/` |
+| `SIGNING_ACCOUNT_NAME` | Existing Azure signing account |
+| `SIGNING_CERTIFICATE_PROFILE` | Certificate profile authorized for this application |
+| `MSIX_PUBLISHER` | Exact certificate subject distinguished name, matching the MSIX manifest publisher |
+
+The signing identity must have the service's Certificate Profile Signer role. Obtain `MSIX_PUBLISHER` from the signing certificate/profile; do not guess it or leave the template `CN=AppPublisher`. Secrets must be provisioned through GitHub settings, never checked in or printed. The pipeline does not create Azure identities, grant roles, or copy WindowsEdgeLight's secrets. Missing configuration or invalid signatures stops publication; there is no unsigned fallback release.
+
+After configuration, run **Signed release** manually with version `0.1.0` to verify signed artifacts before tagging. A stable tag such as `v0.1.0` creates the versioned draft only after all checks pass. Windows installs a trusted signed MSIX through App Installer; no development certificate installation or warning bypass is part of distribution.
 
 ## Project layout
 

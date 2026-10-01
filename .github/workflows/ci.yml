@@ -1,0 +1,87 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        default: '0.1.0'
+      publisher:
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  test:
+    name: Synthetic assertions
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify stable version parsing
+        run: |
+          $info = .\scripts\Get-ReleaseVersion.ps1 -Version v1.2.3
+          if ($info.PackageVersion -ne '1.2.3.0') { throw 'Version conversion failed.' }
+          foreach ($bad in @('v1.2', '1.2.3-rc.1', '65536.0.0', '1.2.3;bad', '01.2.3')) {
+            $rejected = $false
+            try { .\scripts\Get-ReleaseVersion.ps1 -Version $bad | Out-Null }
+            catch { $rejected = $true }
+            if (-not $rejected) { throw 'Invalid version was accepted.' }
+          }
+      - name: Run synthetic assertions only
+        run: dotnet run --project .\Tests\CredentialExplorer.Tests.csproj --configuration Release
+
+  package:
+    name: Release MSIX (${{ matrix.architecture }})
+    needs: test
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x64, arm64]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: microsoft/setup-WinAppCli@cc8ea9a08b3ee3db43d5aa6bddda4a0e87d800f7 # v0.1
+        with:
+          version: '0.6.0'
+      - name: Publish and verify self-contained MSIX
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          PACKAGE_VERSION: ${{ inputs.version || '0.1.0' }}
+          PACKAGE_PUBLISHER: ${{ inputs.publisher }}
+        run: |
+          .\scripts\Build-Package.ps1 -Architecture $env:ARCHITECTURE `
+            -Version $env:PACKAGE_VERSION -Publisher $env:PACKAGE_PUBLISHER `
+            -OutputDirectory "$env:RUNNER_TEMP\packages"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: CredentialExplorer-unsigned-${{ matrix.architecture }}
+          path: |
+            ${{ runner.temp }}\packages\*.msix
+            ${{ runner.temp }}\packages\*.msix.sha256
+          if-no-files-found: error
+          retention-days: 7
