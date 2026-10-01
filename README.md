@@ -2,6 +2,16 @@
 
 A standalone WinUI 3 metadata-only front end over the current user's existing credential stores. There is no new password database, telemetry, network client, metadata persistence, or secret reveal, copy, replacement, or export. Supported Windows entries allow explicitly confirmed username-only metadata edits while retaining the existing secret.
 
+## Screenshots
+
+All entries, usernames, counts, and dates below come from the isolated synthetic demo, not a real credential store.
+
+![Credential Explorer in dark mode with a virtualized credential list and metadata detail pane, displaying synthetic example entries](docs/images/synthetic-overview.png)
+
+Username-only editing names the exact entry, preserves the existing secret, and defaults to Cancel.
+
+![Username-edit dialog for a synthetic Generic credential, showing the unchanged target and secret-preservation explanation](docs/images/synthetic-edit-username.png)
+
 ## Features
 
 - Separate Windows and Web / Credential Locker views with accurate per-store enumeration counts.
